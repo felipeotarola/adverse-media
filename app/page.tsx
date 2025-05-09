@@ -11,7 +11,7 @@ export default function Home() {
         <h1 className="text-3xl font-bold tracking-tight">KYC Threat Intelligence</h1>
         <p className="text-muted-foreground max-w-2xl mx-auto">
           Advanced threat detection system for identifying adverse media mentions and risk factors for individuals and
-          organizations.
+          organizations. 
         </p>
       </div>
 
