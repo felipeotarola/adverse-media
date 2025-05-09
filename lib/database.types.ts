@@ -1,0 +1,125 @@
+export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[]
+
+export interface Database {
+  public: {
+    Tables: {
+      searches: {
+        Row: {
+          id: string
+          created_at: string
+          individual_name: string
+          company_name: string | null
+          additional_info: string | null
+          risk_level: string
+          adverse_findings: number
+          recommendation: string
+          user_id: string | null
+        }
+        Insert: {
+          id?: string
+          created_at?: string
+          individual_name: string
+          company_name?: string | null
+          additional_info?: string | null
+          risk_level: string
+          adverse_findings: number
+          recommendation: string
+          user_id?: string | null
+        }
+        Update: {
+          id?: string
+          created_at?: string
+          individual_name?: string
+          company_name?: string | null
+          additional_info?: string | null
+          risk_level?: string
+          adverse_findings?: number
+          recommendation?: string
+          user_id?: string | null
+        }
+      }
+      search_results: {
+        Row: {
+          id: string
+          search_id: string
+          created_at: string
+          url: string
+          title: string
+          description: string
+          risk_score: number
+          adverse_content: string[] | null
+          raw_search_data: Json | null
+          raw_crawl_data: Json | null
+        }
+        Insert: {
+          id?: string
+          search_id: string
+          created_at?: string
+          url: string
+          title: string
+          description: string
+          risk_score: number
+          adverse_content?: string[] | null
+          raw_search_data?: Json | null
+          raw_crawl_data?: Json | null
+        }
+        Update: {
+          id?: string
+          search_id?: string
+          created_at?: string
+          url?: string
+          title?: string
+          description?: string
+          risk_score?: number
+          adverse_content?: string[] | null
+          raw_search_data?: Json | null
+          raw_crawl_data?: Json | null
+        }
+      }
+      search_sources: {
+        Row: {
+          id: string
+          search_id: string
+          created_at: string
+          source_type: string
+          url: string
+          status: string
+          raw_data: Json | null
+          metadata: Json | null
+        }
+        Insert: {
+          id?: string
+          search_id: string
+          created_at?: string
+          source_type: string
+          url: string
+          status: string
+          raw_data?: Json | null
+          metadata?: Json | null
+        }
+        Update: {
+          id?: string
+          search_id?: string
+          created_at?: string
+          source_type?: string
+          url?: string
+          status?: string
+          raw_data?: Json | null
+          metadata?: Json | null
+        }
+      }
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      [_ in never]: never
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
+}
