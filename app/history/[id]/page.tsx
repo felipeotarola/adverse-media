@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { DeleteSearchButton } from "@/components/delete-search-button"
+import { RelationshipDiagram } from "@/components/relationship-diagram"
 import Link from "next/link"
 import {
   AlertTriangle,
@@ -24,6 +25,7 @@ import {
   UserX,
   Loader2,
   RefreshCw,
+  Network,
 } from "lucide-react"
 import { supabase } from "@/lib/supabase"
 
@@ -35,6 +37,7 @@ export default function SearchDetailsPage() {
   const [search, setSearch] = useState<any>(null)
   const [results, setResults] = useState<any[]>([])
   const [sources, setSources] = useState<any[]>([])
+  const [relationships, setRelationships] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -74,9 +77,21 @@ export default function SearchDetailsPage() {
         throw sourcesError
       }
 
+      // Get the relationships
+      const { data: relationshipsData, error: relError } = await supabase
+        .from("entity_relationships")
+        .select("*")
+        .eq("search_id", searchId)
+
+      if (relError && !relError.message.includes("does not exist")) {
+        console.error("Error fetching relationships:", relError)
+        // Continue anyway, this is not critical
+      }
+
       setSearch(searchData)
       setResults(resultsData || [])
       setSources(sourcesData || [])
+      setRelationships(relationshipsData || [])
       setError(null)
     } catch (err) {
       console.error("Error fetching search details:", err)
@@ -127,6 +142,9 @@ export default function SearchDetailsPage() {
   // Group sources by type
   const searchSources = sources.filter((s) => s.source_type === "search") || []
   const crawlSources = sources.filter((s) => s.source_type === "crawl") || []
+
+  // Check if we have relationships
+  const hasRelationships = relationships && relationships.length > 0
 
   return (
     <div className="container mx-auto py-10 px-4">
@@ -190,11 +208,27 @@ export default function SearchDetailsPage() {
           </AlertDescription>
         </Alert>
 
+        {/* Display relationship diagram if relationships were found */}
+        {hasRelationships && (
+          <div className="mb-6">
+            <RelationshipDiagram relationships={relationships} targetName={search.individual_name} />
+          </div>
+        )}
+
         <Tabs defaultValue="results">
-          <TabsList className="grid w-full grid-cols-2 mb-6">
+          <TabsList className="grid w-full grid-cols-3 mb-6">
             <TabsTrigger value="results" className="flex items-center">
               <FileText className="h-4 w-4 mr-2" />
               Analysis Results
+            </TabsTrigger>
+            <TabsTrigger value="relationships" className="flex items-center" disabled={!hasRelationships}>
+              <Network className="h-4 w-4 mr-2" />
+              Relationships
+              {hasRelationships && (
+                <Badge variant="outline" className="ml-1">
+                  {relationships.length}
+                </Badge>
+              )}
             </TabsTrigger>
             <TabsTrigger value="sources" className="flex items-center">
               <Search className="h-4 w-4 mr-2" />
@@ -261,11 +295,10 @@ export default function SearchDetailsPage() {
                         <p className="text-sm text-gray-500">No significant adverse content detected</p>
                       )}
                     </CardContent>
-                    {result.raw_search_data?.entityMatch && (
+                    {result.entity_match_confidence > 0 && (
                       <CardFooter className="border-t pt-4 pb-2">
                         <div className="flex items-center text-sm">
-                          {result.raw_search_data.entityMatch.isExactMatch ||
-                          result.raw_search_data.entityMatch.confidence >= 70 ? (
+                          {result.entity_match_is_exact || result.entity_match_confidence >= 70 ? (
                             <UserCheck className="h-4 w-4 text-green-500 mr-2" />
                           ) : (
                             <UserX className="h-4 w-4 text-amber-500 mr-2" />
@@ -274,16 +307,15 @@ export default function SearchDetailsPage() {
                             <span className="font-medium">Entity Match:</span>{" "}
                             <Badge
                               variant={
-                                result.raw_search_data.entityMatch.isExactMatch ||
-                                result.raw_search_data.entityMatch.confidence >= 70
+                                result.entity_match_is_exact || result.entity_match_confidence >= 70
                                   ? "outline"
                                   : "secondary"
                               }
                               className="ml-1"
                             >
-                              {result.raw_search_data.entityMatch.confidence}% confidence
+                              {result.entity_match_confidence}% confidence
                             </Badge>
-                            <p className="text-xs text-gray-500 mt-1">{result.raw_search_data.entityMatch.reason}</p>
+                            <p className="text-xs text-gray-500 mt-1">{result.entity_match_reason}</p>
                           </div>
                         </div>
                       </CardFooter>
@@ -294,6 +326,67 @@ export default function SearchDetailsPage() {
                 <Card>
                   <CardContent className="p-6">
                     <p className="text-center text-gray-500">No results found for this search.</p>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="relationships">
+            <div className="space-y-4">
+              <h2 className="text-xl font-semibold">Relationship Analysis</h2>
+
+              {hasRelationships ? (
+                <div className="space-y-4">
+                  {/* Group relationships by type */}
+                  {Object.entries(
+                    relationships.reduce(
+                      (acc, rel) => {
+                        if (!acc[rel.relationship_type]) {
+                          acc[rel.relationship_type] = []
+                        }
+                        acc[rel.relationship_type].push(rel)
+                        return acc
+                      },
+                      {} as Record<string, any[]>,
+                    ),
+                  ).map(([type, rels]) => (
+                    <Card key={type}>
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-lg">
+                          {type.charAt(0).toUpperCase() + type.slice(1)} Relationships
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-3">
+                          {rels.map((rel) => (
+                            <div key={rel.id} className="p-3 border rounded-md bg-card/50">
+                              <div className="flex justify-between items-start">
+                                <div className="flex items-center">
+                                  <User className="h-4 w-4 mr-2 text-primary" />
+                                  <span className="font-medium">{rel.related_name}</span>
+                                </div>
+                                <Badge variant="outline">{rel.confidence}% confidence</Badge>
+                              </div>
+                              {rel.description && (
+                                <p className="mt-2 text-sm text-muted-foreground">{rel.description}</p>
+                              )}
+                              {rel.source_url && (
+                                <div className="mt-2 text-xs text-muted-foreground">
+                                  Source: {rel.source_title || rel.source_url}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              ) : (
+                <Card>
+                  <CardContent className="p-6 text-center">
+                    <p className="text-gray-500">No relationships found for this search.</p>
                   </CardContent>
                 </Card>
               )}
