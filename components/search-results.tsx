@@ -25,15 +25,29 @@ import {
   FileWarning,
   Code,
   History,
+  Network,
+  Users,
+  Building,
+  User,
 } from "lucide-react"
 import { saveSearchResults } from "@/app/actions"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
+import { RelationshipDiagram } from "@/components/relationship-diagram"
 
 interface EntityMatch {
   isExactMatch: boolean
   confidence: number
   reason: string
+}
+
+interface Relationship {
+  name: string
+  type: string
+  description: string
+  confidence: number
+  sourceUrl?: string
+  sourceTitle?: string
 }
 
 interface SearchResult {
@@ -44,6 +58,7 @@ interface SearchResult {
   adverseContent?: string[]
   status: "analyzing" | "complete"
   entityMatch?: EntityMatch
+  relationships?: Relationship[]
   rawSearchData?: any
   rawCrawlData?: any
 }
@@ -75,6 +90,7 @@ interface SearchStatus {
   error?: string
   searchId?: string
   autoSaved?: boolean
+  relationships?: Relationship[]
 }
 
 export function SearchResults({
@@ -290,6 +306,7 @@ export function SearchResults({
         searchStatus.results,
         searchStatus.summary,
         searchStatus.sources,
+        searchStatus.relationships || [],
       )
 
       if (result.success) {
@@ -326,6 +343,9 @@ export function SearchResults({
       router.push(`/history/${searchStatus.searchId}`)
     }
   }
+
+  // Check if we have any relationships
+  const hasRelationships = searchStatus.relationships && searchStatus.relationships.length > 0
 
   return (
     <div className="space-y-6">
@@ -540,11 +560,38 @@ export function SearchResults({
         </Alert>
       )}
 
+      {/* Display relationship diagram if relationships were found */}
+      {hasRelationships && searchStatus.status === "complete" && (
+        <RelationshipDiagram
+          relationships={searchStatus.relationships!.map((rel, index) => ({
+            id: `rel-${index}`,
+            search_id: searchStatus.searchId || "",
+            target_name: individualName,
+            related_name: rel.name,
+            relationship_type: rel.type,
+            description: rel.description,
+            confidence: rel.confidence,
+            source_url: rel.sourceUrl,
+            source_title: rel.sourceTitle,
+          }))}
+          targetName={individualName}
+        />
+      )}
+
       <Tabs value={activeTab} onValueChange={setActiveTab} className="border rounded-lg">
-        <TabsList className="grid w-full grid-cols-2 bg-muted/50 p-1">
+        <TabsList className="grid w-full grid-cols-3 bg-muted/50 p-1">
           <TabsTrigger value="results" className="flex items-center">
             <FileText className="h-4 w-4 mr-2" />
             Threat Analysis
+          </TabsTrigger>
+          <TabsTrigger value="relationships" className="flex items-center" disabled={!hasRelationships}>
+            <Network className="h-4 w-4 mr-2" />
+            Relationships
+            {hasRelationships && (
+              <Badge variant="outline" className="ml-1">
+                {searchStatus.relationships!.length}
+              </Badge>
+            )}
           </TabsTrigger>
           <TabsTrigger value="sources" className="flex items-center">
             <Database className="h-4 w-4 mr-2" />
@@ -632,6 +679,29 @@ export function SearchResults({
                       No significant adverse content detected
                     </p>
                   )}
+
+                  {/* Show relationships found in this result */}
+                  {result.relationships && result.relationships.length > 0 && (
+                    <div className="mt-3 pt-3 border-t">
+                      <p className="text-sm font-medium flex items-center">
+                        <Network className="h-3.5 w-3.5 mr-1.5 text-primary" />
+                        Relationships Identified:
+                      </p>
+                      <div className="mt-2 space-y-2">
+                        {result.relationships.map((rel, i) => (
+                          <div key={i} className="text-sm p-2 rounded bg-muted/50">
+                            <div className="flex justify-between">
+                              <span className="font-medium">{rel.name}</span>
+                              <Badge variant="outline" className="text-xs">
+                                {rel.type}
+                              </Badge>
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">{rel.description}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
                 {result.entityMatch && (
                   <CardFooter className="border-t pt-3 pb-3">
@@ -669,6 +739,93 @@ export function SearchResults({
                     <p className="text-foreground/80">No adverse media or risk factors detected.</p>
                     <p className="text-xs text-muted-foreground mt-1">
                       Try broadening your search terms for more results.
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="relationships" className="mt-4 p-4">
+          <div className="space-y-4">
+            <div className="flex items-center">
+              <h2 className="text-lg font-semibold flex items-center">
+                <Network className="h-4 w-4 mr-2 text-primary" />
+                Relationship Analysis
+              </h2>
+              <div className="ml-auto text-xs text-muted-foreground">
+                {searchStatus.relationships?.length || 0} relationships identified
+              </div>
+            </div>
+
+            {hasRelationships ? (
+              <div className="space-y-4">
+                {/* Group relationships by type */}
+                {Object.entries(
+                  searchStatus.relationships!.reduce(
+                    (acc, rel) => {
+                      if (!acc[rel.type]) {
+                        acc[rel.type] = []
+                      }
+                      acc[rel.type].push(rel)
+                      return acc
+                    },
+                    {} as Record<string, Relationship[]>,
+                  ),
+                ).map(([type, rels]) => (
+                  <Card key={type}>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base flex items-center">
+                        {type === "family" ? (
+                          <Users className="h-4 w-4 mr-2 text-primary" />
+                        ) : type === "business" ? (
+                          <Building className="h-4 w-4 mr-2 text-primary" />
+                        ) : type === "political" ? (
+                          <Shield className="h-4 w-4 mr-2 text-primary" />
+                        ) : type === "criminal" ? (
+                          <AlertTriangle className="h-4 w-4 mr-2 text-warning" />
+                        ) : (
+                          <Network className="h-4 w-4 mr-2 text-primary" />
+                        )}
+                        {type.charAt(0).toUpperCase() + type.slice(1)} Relationships
+                        <Badge variant="outline" className="ml-2">
+                          {rels.length}
+                        </Badge>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-3">
+                        {rels.map((rel, i) => (
+                          <div key={i} className="p-3 border rounded-md bg-card/50">
+                            <div className="flex justify-between items-start">
+                              <div className="flex items-center">
+                                <User className="h-4 w-4 mr-2 text-primary" />
+                                <span className="font-medium">{rel.name}</span>
+                              </div>
+                              <Badge variant="outline">{rel.confidence}% confidence</Badge>
+                            </div>
+                            {rel.description && <p className="mt-2 text-sm text-muted-foreground">{rel.description}</p>}
+                            {rel.sourceUrl && (
+                              <div className="mt-2 text-xs text-muted-foreground">
+                                Source: {rel.sourceTitle || rel.sourceUrl}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <Card>
+                <CardContent className="p-6 text-center">
+                  <div className="flex flex-col items-center">
+                    <Network className="h-8 w-8 text-muted-foreground mb-2" />
+                    <p className="text-foreground/80">No relationships identified.</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      No connections to other individuals or organizations were found in the analyzed content.
                     </p>
                   </div>
                 </CardContent>

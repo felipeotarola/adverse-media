@@ -5,7 +5,7 @@ import { z } from "zod"
 import FirecrawlApp from "@mendable/firecrawl-js"
 import { extractJsonFromText } from "@/lib/utils"
 import { createOrUpdateSearch, savePartialResults, finalizeSearch } from "@/app/actions"
-import { supabase } from "@/lib/supabase" // Fix the import path
+import { supabase } from "@/lib/supabase"
 
 // Define keyword mappings
 const keywordMappings: Record<string, string> = {
@@ -109,7 +109,8 @@ const webScrape = tool({
 
 // Define a tool for analyzing content for adverse media
 const analyzeContent = tool({
-  description: "Analyze content for adverse media mentions with strict entity verification",
+  description:
+    "Analyze content for adverse media mentions with strict entity verification and relationship identification",
   parameters: z.object({
     content: z.string().describe("The content to analyze"),
     individualName: z.string().describe("The individual to look for"),
@@ -130,6 +131,7 @@ const analyzeContent = tool({
             confidence: 0,
             reason: "Insufficient content",
           },
+          relationships: [],
         }
       }
 
@@ -164,6 +166,14 @@ const analyzeContent = tool({
         - Regulatory violations
         ${keywords.length > 0 ? `- Specific mentions of any of these keywords: ${keywords.join(", ")}` : ""}
         
+        STEP 3: RELATIONSHIP IDENTIFICATION
+        Identify any relationships mentioned between the target individual and other people or organizations:
+        - Family relationships (spouse, children, siblings, parents, etc.)
+        - Business relationships (partners, associates, employees, etc.)
+        - Political relationships (allies, opponents, etc.)
+        - Criminal relationships (accomplices, co-defendants, etc.)
+        - Other significant relationships
+        
         CONTENT TO ANALYZE:
         ${content}
         
@@ -176,6 +186,13 @@ const analyzeContent = tool({
             confidence: number from 0-100 indicating confidence in the match,
             reason: string explaining the match assessment
           }
+        - relationships: array of objects with the following structure:
+            {
+              name: string (name of the related person or organization),
+              type: string (type of relationship, e.g., "family", "business", "political", "criminal"),
+              description: string (description of the relationship),
+              confidence: number from 0-100 indicating confidence in this relationship
+            }
         
         IMPORTANT: Return ONLY the JSON object with no markdown formatting, code blocks, or additional text.
       `
@@ -193,7 +210,14 @@ const analyzeContent = tool({
           if (!parsedResult.entityMatch?.isExactMatch && parsedResult.entityMatch?.confidence < 70) {
             parsedResult.riskScore = 0
             parsedResult.adverseContent = []
+            parsedResult.relationships = []
           }
+
+          // Ensure relationships is always an array
+          if (!parsedResult.relationships) {
+            parsedResult.relationships = []
+          }
+
           return parsedResult
         }
 
@@ -208,6 +232,7 @@ const analyzeContent = tool({
             confidence: 0,
             reason: "Error in analysis",
           },
+          relationships: [],
         }
       } catch (e) {
         console.error("Error parsing analysis result:", e)
@@ -220,6 +245,7 @@ const analyzeContent = tool({
             confidence: 0,
             reason: "Error in analysis",
           },
+          relationships: [],
         }
       }
     } catch (error) {
@@ -233,6 +259,7 @@ const analyzeContent = tool({
           confidence: 0,
           reason: "Error in analysis",
         },
+        relationships: [],
       }
     }
   },
@@ -283,6 +310,9 @@ const analyzeSearchResult = tool({
         - Regulatory violations
         ${keywords.length > 0 ? `- Specific mentions of any of these keywords: ${keywords.join(", ")}` : ""}
         
+        STEP 3: RELATIONSHIP IDENTIFICATION
+        Try to identify any relationships mentioned between the target individual and other people or organizations.
+        
         SEARCH RESULT:
         Title: ${title}
         Description: ${description}
@@ -297,6 +327,13 @@ const analyzeSearchResult = tool({
             confidence: number from 0-100 indicating confidence in the match,
             reason: string explaining the match assessment
           }
+        - relationships: array of objects with the following structure:
+            {
+              name: string (name of the related person or organization),
+              type: string (type of relationship, e.g., "family", "business", "political", "criminal"),
+              description: string (description of the relationship),
+              confidence: number from 0-100 indicating confidence in this relationship
+            }
         
         IMPORTANT: Return ONLY the JSON object with no markdown formatting, code blocks, or additional text.
       `
@@ -314,7 +351,14 @@ const analyzeSearchResult = tool({
           if (!parsedResult.entityMatch?.isExactMatch && parsedResult.entityMatch?.confidence < 70) {
             parsedResult.riskScore = 0
             parsedResult.adverseContent = []
+            parsedResult.relationships = []
           }
+
+          // Ensure relationships is always an array
+          if (!parsedResult.relationships) {
+            parsedResult.relationships = []
+          }
+
           return parsedResult
         }
 
@@ -329,6 +373,7 @@ const analyzeSearchResult = tool({
             confidence: 0,
             reason: "Error in analysis",
           },
+          relationships: [],
         }
       } catch (e) {
         console.error("Error parsing search result analysis:", e, "Raw text:", text)
@@ -341,6 +386,7 @@ const analyzeSearchResult = tool({
             confidence: 0,
             reason: "Error in analysis",
           },
+          relationships: [],
         }
       }
     } catch (error) {
@@ -354,6 +400,7 @@ const analyzeSearchResult = tool({
           confidence: 0,
           reason: "Error in analysis",
         },
+        relationships: [],
       }
     }
   },
@@ -409,6 +456,9 @@ export async function POST(req: NextRequest) {
     },
     crawl: [] as any[],
   }
+
+  // Track all relationships found
+  let allRelationships: any[] = []
 
   // Start the search and analysis process
   ;(async () => {
@@ -475,6 +525,7 @@ export async function POST(req: NextRequest) {
           summary,
           searchId: currentSearchId,
           autoSaved: true,
+          relationships: [],
         })
         return
       }
@@ -570,6 +621,18 @@ export async function POST(req: NextRequest) {
         const isValidMatch = analysis.entityMatch?.isExactMatch || analysis.entityMatch?.confidence >= 70
         if (isValidMatch) {
           validEntityMatches++
+
+          // If this is a valid match and has relationships, add them to our collection
+          if (analysis.relationships && analysis.relationships.length > 0) {
+            // Add source URL to each relationship
+            const relationshipsWithSource = analysis.relationships.map((rel: any) => ({
+              ...rel,
+              sourceUrl: result.url,
+              sourceTitle: result.title || "No title",
+            }))
+
+            allRelationships = [...allRelationships, ...relationshipsWithSource]
+          }
         }
 
         const analyzedResult = {
@@ -584,6 +647,7 @@ export async function POST(req: NextRequest) {
             confidence: 0,
             reason: "No entity match information",
           },
+          relationships: analysis.relationships || [],
           rawSearchData: result,
           rawCrawlData:
             scrapeResult.status === "success"
@@ -621,6 +685,7 @@ export async function POST(req: NextRequest) {
           ],
           sources: sources,
           searchId: currentSearchId,
+          relationships: allRelationships,
         })
 
         // Save partial results periodically
@@ -665,6 +730,11 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      // Add information about relationships if any were found
+      if (allRelationships.length > 0) {
+        recommendation += ` ${allRelationships.length} relationships to other individuals or organizations were identified.`
+      }
+
       // Create the final summary
       const summary = {
         riskLevel: riskLevel as "low" | "medium" | "high",
@@ -689,6 +759,7 @@ export async function POST(req: NextRequest) {
         summary,
         searchId: currentSearchId,
         autoSaved: true,
+        relationships: allRelationships,
       })
     } catch (error) {
       console.error("Error in search process:", error)

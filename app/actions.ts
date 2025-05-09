@@ -10,6 +10,15 @@ interface EntityMatch {
   reason: string
 }
 
+interface Relationship {
+  name: string
+  type: string
+  description: string
+  confidence: number
+  sourceUrl?: string
+  sourceTitle?: string
+}
+
 interface SearchResult {
   url: string
   title: string
@@ -18,6 +27,7 @@ interface SearchResult {
   adverseContent?: string[]
   status: "analyzing" | "complete"
   entityMatch?: EntityMatch
+  relationships?: Relationship[]
   rawSearchData?: any
   rawCrawlData?: any
 }
@@ -146,6 +156,29 @@ export async function savePartialResults(
           console.error("Error saving partial search results:", resultsError)
           return { success: false, error: resultsError.message }
         }
+
+        // Save relationships for each result
+        for (const result of newResults) {
+          if (result.relationships && result.relationships.length > 0) {
+            const relationshipsToInsert = result.relationships.map((rel) => ({
+              search_id: searchId,
+              target_name: result.title,
+              related_name: rel.name,
+              relationship_type: rel.type,
+              description: rel.description,
+              confidence: rel.confidence,
+              source_url: rel.sourceUrl || result.url,
+              source_title: rel.sourceTitle || result.title,
+            }))
+
+            const { error: relError } = await supabase.from("entity_relationships").insert(relationshipsToInsert)
+
+            if (relError) {
+              console.error("Error saving relationships:", relError)
+              // Continue anyway, this is not critical
+            }
+          }
+        }
       }
     }
 
@@ -200,6 +233,38 @@ export async function savePartialResults(
   }
 }
 
+// Function to save relationships
+export async function saveRelationships(searchId: string, relationships: Relationship[], targetName: string) {
+  try {
+    if (!searchId || !relationships || relationships.length === 0) {
+      return { success: true } // Nothing to save
+    }
+
+    const relationshipsToInsert = relationships.map((rel) => ({
+      search_id: searchId,
+      target_name: targetName,
+      related_name: rel.name,
+      relationship_type: rel.type,
+      description: rel.description,
+      confidence: rel.confidence,
+      source_url: rel.sourceUrl,
+      source_title: rel.sourceTitle,
+    }))
+
+    const { error } = await supabase.from("entity_relationships").insert(relationshipsToInsert)
+
+    if (error) {
+      console.error("Error saving relationships:", error)
+      return { success: false, error: error.message }
+    }
+
+    return { success: true }
+  } catch (error) {
+    console.error("Error in saveRelationships:", error)
+    return { success: false, error: "An unexpected error occurred" }
+  }
+}
+
 // Function to finalize a search with complete results
 export async function finalizeSearch(searchId: string, summary: SearchSummary) {
   try {
@@ -245,6 +310,7 @@ export async function saveSearchResults(
   results: SearchResult[],
   summary: SearchSummary,
   sources: SearchSources,
+  relationships: Relationship[] = [],
 ) {
   try {
     // Create a new search
@@ -263,6 +329,11 @@ export async function saveSearchResults(
 
     // Save all results
     await savePartialResults(searchId, results, sources, 100)
+
+    // Save relationships
+    if (relationships && relationships.length > 0) {
+      await saveRelationships(searchId, relationships, individualName)
+    }
 
     // Finalize the search
     await finalizeSearch(searchId, summary)
@@ -346,7 +417,20 @@ export async function getSearchDetails(searchId: string) {
       return { success: false, error: sourcesError.message }
     }
 
-    return { success: true, search, results, sources }
+    // Get the relationships
+    const { data: relationships, error: relError } = await supabase
+      .from("entity_relationships")
+      .select("*")
+      .eq("search_id", searchId)
+      // Add a filter that always evaluates to true but includes the timestamp
+      .or(`search_id.eq.${searchId},timestamp.eq.${timestamp}`)
+
+    if (relError) {
+      console.error("Error fetching relationships:", relError)
+      // Continue anyway, this is not critical
+    }
+
+    return { success: true, search, results, sources, relationships: relationships || [] }
   } catch (error) {
     console.error("Error in getSearchDetails:", error)
     return { success: false, error: "An unexpected error occurred" }
@@ -371,6 +455,14 @@ export async function deleteSearch(searchId: string) {
     if (sourcesError) {
       console.error("Error deleting search sources:", sourcesError)
       return { success: false, error: sourcesError.message }
+    }
+
+    // Delete relationships
+    const { error: relError } = await supabase.from("entity_relationships").delete().eq("search_id", searchId)
+
+    if (relError && !relError.message.includes("does not exist")) {
+      console.error("Error deleting relationships:", relError)
+      // Continue anyway, this is not critical
     }
 
     // Check if allabolag_sources table exists and delete records if it does
