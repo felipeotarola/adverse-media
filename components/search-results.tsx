@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -24,6 +24,7 @@ import {
   RefreshCw,
   FileWarning,
   Code,
+  History,
 } from "lucide-react"
 import { saveSearchResults } from "@/app/actions"
 import { useToast } from "@/hooks/use-toast"
@@ -69,8 +70,11 @@ interface SearchStatus {
       totalResults: number
       validEntityMatches: number
     }
+    keywords?: string[]
   }
   error?: string
+  searchId?: string
+  autoSaved?: boolean
 }
 
 export function SearchResults({
@@ -90,12 +94,99 @@ export function SearchResults({
   const [isSaving, setIsSaving] = useState(false)
   const [isSaved, setIsSaved] = useState(false)
   const [activeTab, setActiveTab] = useState("results")
+  const [connectionError, setConnectionError] = useState<string | null>(null)
   const { toast } = useToast()
   const router = useRouter()
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Add a new function to handle fallback search
+  const tryFallbackSearch = async () => {
+    try {
+      setConnectionError("Trying fallback search method...")
+
+      const response = await fetch("/api/search-fallback", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          individualName,
+          companyName,
+          additionalInfo,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Fallback search failed with status: ${response.status}`)
+      }
+
+      const data = await response.json()
+
+      if (data.success && data.results) {
+        // Create simplified results from the fallback search
+        const fallbackResults = data.results.map((result: any) => ({
+          url: result.url,
+          title: result.title || "No title",
+          description: result.description || "No description",
+          riskScore: 0, // We don't have risk scores in fallback mode
+          status: "complete" as const,
+        }))
+
+        setSearchStatus({
+          status: "complete",
+          progress: 100,
+          results: fallbackResults,
+          sources: {
+            search: {
+              query: data.query,
+              results: data.results,
+              rawData: data,
+            },
+            crawl: [],
+          },
+          summary: {
+            riskLevel: "low" as const,
+            adverseFindings: 0,
+            recommendation: "Limited search performed using fallback method. Results may be incomplete.",
+          },
+        })
+
+        toast({
+          title: "Fallback search completed",
+          description: "Limited results retrieved using alternative method",
+        })
+      } else {
+        throw new Error("Fallback search returned no results")
+      }
+    } catch (error) {
+      console.error("Fallback search error:", error)
+      toast({
+        title: "Fallback search failed",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      })
+    }
+  }
 
   useEffect(() => {
     const fetchResults = async () => {
       try {
+        console.log("Starting search for:", { individualName, companyName, additionalInfo })
+
+        // Set a timeout to detect if the search doesn't start
+        searchTimeoutRef.current = setTimeout(() => {
+          console.error("Search timed out - no response received")
+          setConnectionError("Search timed out. The server did not respond in a reasonable time.")
+        }, 15000) // 15 seconds timeout
+
+        // First test if the API is working
+        const testResponse = await fetch("/api/test")
+        if (!testResponse.ok) {
+          throw new Error(`API test failed with status: ${testResponse.status}`)
+        }
+
+        console.log("API test successful, starting search...")
+
         const response = await fetch("/api/search", {
           method: "POST",
           headers: {
@@ -108,33 +199,61 @@ export function SearchResults({
           }),
         })
 
+        if (!response.ok) {
+          const errorText = await response.text()
+          throw new Error(`Search API returned error status: ${response.status}, message: ${errorText}`)
+        }
+
         if (!response.body) {
           throw new Error("Response body is null")
         }
 
+        // Clear the timeout since we got a response
+        if (searchTimeoutRef.current) {
+          clearTimeout(searchTimeoutRef.current)
+          searchTimeoutRef.current = null
+        }
+
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
+
+        let receivedData = false
 
         while (true) {
           const { value, done } = await reader.read()
           if (done) break
 
           const chunk = decoder.decode(value, { stream: true })
+          console.log("Received chunk:", chunk)
+
           const lines = chunk.split("\n").filter((line) => line.trim() !== "")
 
           for (const line of lines) {
             try {
               if (line.startsWith("data: ")) {
+                receivedData = true
                 const data = JSON.parse(line.substring(6))
+                console.log("Parsed data:", data)
+
+                // Check if this update includes autoSaved flag
+                if (data.autoSaved) {
+                  setIsSaved(true)
+                }
+
                 setSearchStatus((prev) => ({ ...prev, ...data }))
               }
             } catch (e) {
-              console.error("Error parsing chunk:", e)
+              console.error("Error parsing chunk:", e, "Raw line:", line)
             }
           }
         }
+
+        if (!receivedData) {
+          throw new Error("No data received from the search API")
+        }
       } catch (error) {
         console.error("Error fetching search results:", error)
+        setConnectionError(error instanceof Error ? error.message : "Unknown error occurred")
         setSearchStatus((prev) => ({
           ...prev,
           status: "complete",
@@ -145,6 +264,13 @@ export function SearchResults({
     }
 
     fetchResults()
+
+    // Clean up the timeout if component unmounts
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current)
+      }
+    }
   }, [individualName, companyName, additionalInfo])
 
   // Calculate the highest risk score from all results with valid entity matches
@@ -195,6 +321,12 @@ export function SearchResults({
     router.push("/history")
   }
 
+  const viewSearchDetails = () => {
+    if (searchStatus.searchId) {
+      router.push(`/history/${searchStatus.searchId}`)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <Card className="border shadow-sm">
@@ -203,6 +335,11 @@ export function SearchResults({
             <div className="flex items-center">
               <Terminal className="h-5 w-5 mr-2 text-primary" />
               Threat Intelligence Scan
+              {searchStatus.searchId && (
+                <Badge variant="outline" className="ml-2 text-xs">
+                  ID: {searchStatus.searchId.substring(0, 8)}
+                </Badge>
+              )}
             </div>
             <Badge
               variant={
@@ -227,6 +364,13 @@ export function SearchResults({
               : searchStatus.status === "analyzing"
                 ? "Running threat analysis algorithms on retrieved data..."
                 : "Analysis complete. Results compiled and threat assessment generated."}
+
+            {searchStatus.autoSaved && (
+              <span className="ml-2 text-primary flex items-center">
+                <CheckCircle className="h-3 w-3 mr-1" />
+                Auto-saved
+              </span>
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent className="pt-4">
@@ -251,7 +395,12 @@ export function SearchResults({
 
           {searchStatus.status === "complete" && (
             <div className="flex justify-end mt-4 space-x-2">
-              {!isSaved ? (
+              {searchStatus.searchId ? (
+                <Button onClick={viewSearchDetails} size="sm">
+                  <History className="mr-2 h-3.5 w-3.5" />
+                  View Full Report
+                </Button>
+              ) : !isSaved ? (
                 <Button onClick={handleSaveResults} disabled={isSaving} size="sm">
                   {isSaving ? (
                     <>
@@ -275,6 +424,30 @@ export function SearchResults({
         </CardContent>
       </Card>
 
+      {connectionError && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Connection Error</AlertTitle>
+          <AlertDescription className="flex flex-col gap-2">
+            <p>{connectionError}</p>
+            <div className="mt-2 p-2 bg-black/5 rounded text-xs font-mono overflow-auto">
+              <p>Debug info:</p>
+              <p>Individual: {individualName}</p>
+              <p>Company: {companyName || "N/A"}</p>
+              <p>Additional Info: {additionalInfo || "N/A"}</p>
+            </div>
+            <Button onClick={() => window.location.reload()} size="sm" variant="outline" className="self-start mt-2">
+              <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+              Retry Connection
+            </Button>
+            <Button onClick={tryFallbackSearch} size="sm" variant="outline" className="self-start mt-2">
+              <Search className="h-3.5 w-3.5 mr-1.5" />
+              Try Simple Search
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
       {searchStatus.error && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
@@ -285,6 +458,15 @@ export function SearchResults({
               <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
               Retry Connection
             </Button>
+            {searchStatus.searchId && (
+              <p className="text-sm mt-2">
+                Note: Partial results were saved and can be viewed in your{" "}
+                <button onClick={viewSearchDetails} className="underline hover:text-primary">
+                  search history
+                </button>
+                .
+              </p>
+            )}
           </AlertDescription>
         </Alert>
       )}

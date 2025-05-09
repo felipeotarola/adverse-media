@@ -1,5 +1,7 @@
 "use client"
 
+import type React from "react"
+
 import { useState } from "react"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -55,7 +57,11 @@ export function KeywordSelector({ onChange }: KeywordSelectorProps) {
     onChange(newSelectedKeywords)
   }
 
-  const handleSelectAllInCategory = (categoryId: string) => {
+  const handleSelectAllInCategory = (e: React.MouseEvent, categoryId: string) => {
+    // Prevent the event from bubbling up to the form
+    e.preventDefault()
+    e.stopPropagation()
+
     const category = keywordCategories.find((cat) => cat.id === categoryId)
     if (!category) return
 
@@ -68,7 +74,11 @@ export function KeywordSelector({ onChange }: KeywordSelectorProps) {
     onChange(newSelectedKeywords)
   }
 
-  const handleClearCategory = (categoryId: string) => {
+  const handleClearCategory = (e: React.MouseEvent, categoryId: string) => {
+    // Prevent the event from bubbling up to the form
+    e.preventDefault()
+    e.stopPropagation()
+
     const category = keywordCategories.find((cat) => cat.id === categoryId)
     if (!category) return
 
@@ -115,7 +125,8 @@ export function KeywordSelector({ onChange }: KeywordSelectorProps) {
                   <Button
                     variant="outline"
                     size="xs"
-                    onClick={() => handleSelectAllInCategory(category.id)}
+                    type="button" // Explicitly set type to button
+                    onClick={(e) => handleSelectAllInCategory(e, category.id)}
                     className="h-6 text-xs"
                   >
                     <Check className="h-3 w-3 mr-1" />
@@ -124,7 +135,8 @@ export function KeywordSelector({ onChange }: KeywordSelectorProps) {
                   <Button
                     variant="outline"
                     size="xs"
-                    onClick={() => handleClearCategory(category.id)}
+                    type="button" // Explicitly set type to button
+                    onClick={(e) => handleClearCategory(e, category.id)}
                     className="h-6 text-xs"
                   >
                     <X className="h-3 w-3 mr-1" />

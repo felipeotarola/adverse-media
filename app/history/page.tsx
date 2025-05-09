@@ -1,31 +1,80 @@
-import { getSearchHistory } from "@/app/actions"
+"use client"
+
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { DeleteSearchButton } from "@/components/delete-search-button"
 import Link from "next/link"
-import { AlertTriangle, CheckCircle, Clock, User, Building, Info } from "lucide-react"
+import { AlertTriangle, CheckCircle, Clock, User, Building, Info, RefreshCw, Loader2 } from "lucide-react"
+import { supabase } from "@/lib/supabase"
 
-export default async function HistoryPage() {
-  const { success, data: searches, error } = await getSearchHistory()
+export default function HistoryPage() {
+  const [searches, setSearches] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchSearches = async () => {
+    setLoading(true)
+    try {
+      const { data, error } = await supabase.from("searches").select("*").order("created_at", { ascending: false })
+
+      if (error) {
+        throw error
+      }
+
+      setSearches(data || [])
+      setError(null)
+    } catch (err) {
+      console.error("Error fetching search history:", err)
+      setError(err instanceof Error ? err.message : "Failed to load search history")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchSearches()
+  }, [])
 
   return (
     <div className="container mx-auto py-10 px-4">
       <div className="max-w-4xl mx-auto">
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-3xl font-bold">Search History</h1>
-          <Button asChild>
-            <Link href="/">New Search</Link>
-          </Button>
+          <div className="flex space-x-2">
+            <Button variant="outline" onClick={fetchSearches} disabled={loading}>
+              {loading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Loading...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Refresh
+                </>
+              )}
+            </Button>
+            <Button asChild>
+              <Link href="/">New Search</Link>
+            </Button>
+          </div>
         </div>
 
-        {!success ? (
+        {error ? (
           <Card>
             <CardContent className="p-6">
               <p className="text-center text-red-500">Error loading search history: {error}</p>
             </CardContent>
           </Card>
-        ) : searches && searches.length > 0 ? (
+        ) : loading && searches.length === 0 ? (
+          <Card>
+            <CardContent className="p-6 flex justify-center">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </CardContent>
+          </Card>
+        ) : searches.length > 0 ? (
           <div className="space-y-4">
             {searches.map((search) => (
               <Card key={search.id} className="overflow-hidden">
@@ -87,7 +136,7 @@ export default async function HistoryPage() {
                     <Link href={`/history/${search.id}`}>View Details</Link>
                   </Button>
 
-                  <DeleteSearchButton searchId={search.id} name={search.individual_name} />
+                  <DeleteSearchButton searchId={search.id} name={search.individual_name} onDelete={fetchSearches} />
                 </CardFooter>
               </Card>
             ))}

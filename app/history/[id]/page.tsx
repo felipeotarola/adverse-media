@@ -1,4 +1,7 @@
-import { getSearchDetails } from "@/app/actions"
+"use client"
+
+import { useState, useEffect } from "react"
+import { useParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -6,7 +9,6 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { DeleteSearchButton } from "@/components/delete-search-button"
 import Link from "next/link"
-import { notFound } from "next/navigation"
 import {
   AlertTriangle,
   CheckCircle,
@@ -20,16 +22,87 @@ import {
   Search,
   UserCheck,
   UserX,
+  Loader2,
+  RefreshCw,
 } from "lucide-react"
+import { supabase } from "@/lib/supabase"
 
-export default async function SearchDetailsPage({ params }: { params: { id: string } }) {
-  const { success, search, results, sources, error } = await getSearchDetails(params.id)
+export default function SearchDetailsPage() {
+  const params = useParams()
+  const router = useRouter()
+  const searchId = params.id as string
 
-  if (!success || !search) {
-    if (error === "The requested record does not exist") {
-      notFound()
+  const [search, setSearch] = useState<any>(null)
+  const [results, setResults] = useState<any[]>([])
+  const [sources, setSources] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchSearchDetails = async () => {
+    setLoading(true)
+    try {
+      // Get the search record
+      const { data: searchData, error: searchError } = await supabase
+        .from("searches")
+        .select("*")
+        .eq("id", searchId)
+        .single()
+
+      if (searchError) {
+        throw searchError
+      }
+
+      // Get the search results
+      const { data: resultsData, error: resultsError } = await supabase
+        .from("search_results")
+        .select("*")
+        .eq("search_id", searchId)
+        .order("risk_score", { ascending: false })
+
+      if (resultsError) {
+        throw resultsError
+      }
+
+      // Get the search sources
+      const { data: sourcesData, error: sourcesError } = await supabase
+        .from("search_sources")
+        .select("*")
+        .eq("search_id", searchId)
+        .order("created_at", { ascending: true })
+
+      if (sourcesError) {
+        throw sourcesError
+      }
+
+      setSearch(searchData)
+      setResults(resultsData || [])
+      setSources(sourcesData || [])
+      setError(null)
+    } catch (err) {
+      console.error("Error fetching search details:", err)
+      setError(err instanceof Error ? err.message : "Failed to load search details")
+    } finally {
+      setLoading(false)
     }
+  }
 
+  useEffect(() => {
+    if (searchId) {
+      fetchSearchDetails()
+    }
+  }, [searchId])
+
+  if (loading) {
+    return (
+      <div className="container mx-auto py-10 px-4">
+        <div className="max-w-3xl mx-auto flex justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      </div>
+    )
+  }
+
+  if (error || !search) {
     return (
       <div className="container mx-auto py-10 px-4">
         <div className="max-w-3xl mx-auto">
@@ -38,14 +111,22 @@ export default async function SearchDetailsPage({ params }: { params: { id: stri
             <AlertTitle>Error</AlertTitle>
             <AlertDescription>Failed to load search details: {error}</AlertDescription>
           </Alert>
+          <div className="mt-4">
+            <Button asChild variant="outline">
+              <Link href="/history">
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back to History
+              </Link>
+            </Button>
+          </div>
         </div>
       </div>
     )
   }
 
   // Group sources by type
-  const searchSources = sources?.filter((s) => s.source_type === "search") || []
-  const crawlSources = sources?.filter((s) => s.source_type === "crawl") || []
+  const searchSources = sources.filter((s) => s.source_type === "search") || []
+  const crawlSources = sources.filter((s) => s.source_type === "crawl") || []
 
   return (
     <div className="container mx-auto py-10 px-4">
@@ -59,7 +140,17 @@ export default async function SearchDetailsPage({ params }: { params: { id: stri
               </Link>
             </Button>
 
-            <DeleteSearchButton searchId={search.id} name={search.individual_name} />
+            <div className="flex space-x-2">
+              <Button variant="outline" size="sm" onClick={fetchSearchDetails}>
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Refresh
+              </Button>
+              <DeleteSearchButton
+                searchId={search.id}
+                name={search.individual_name}
+                onDelete={() => router.push("/history")}
+              />
+            </div>
           </div>
 
           <h1 className="text-3xl font-bold mb-2">Search Details</h1>

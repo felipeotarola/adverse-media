@@ -4,6 +4,8 @@ import { openai } from "@ai-sdk/openai"
 import { z } from "zod"
 import FirecrawlApp from "@mendable/firecrawl-js"
 import { extractJsonFromText } from "@/lib/utils"
+import { createOrUpdateSearch, savePartialResults, finalizeSearch } from "@/app/actions"
+import { supabase } from "@/lib/supabase" // Fix the import path
 
 // Define keyword mappings
 const keywordMappings: Record<string, string> = {
@@ -358,7 +360,7 @@ const analyzeSearchResult = tool({
 })
 
 export async function POST(req: NextRequest) {
-  const { individualName, companyName, additionalInfo, keywords = [] } = await req.json()
+  const { individualName, companyName, additionalInfo, keywords = [], searchId = null } = await req.json()
 
   // Map keyword IDs to their actual Swedish terms
   const keywordTerms = keywords.map((id) => keywordMappings[id]).filter(Boolean)
@@ -410,13 +412,34 @@ export async function POST(req: NextRequest) {
 
   // Start the search and analysis process
   ;(async () => {
+    let currentSearchId = searchId
+
     try {
+      // Create or update the search record if we don't have an ID yet
+      if (!currentSearchId) {
+        const result = await createOrUpdateSearch(
+          null,
+          individualName,
+          companyName,
+          additionalInfo,
+          "in_progress",
+          keywordTerms,
+        )
+
+        if (!result.success) {
+          throw new Error(`Failed to create search record: ${result.error}`)
+        }
+
+        currentSearchId = result.searchId
+      }
+
       // Initial update
       await sendUpdate({
         status: "searching",
         progress: 5,
         results: [],
         sources: sources,
+        searchId: currentSearchId,
       })
 
       // Step 1: Search the web
@@ -425,18 +448,33 @@ export async function POST(req: NextRequest) {
       sources.search.rawData = searchResponse.rawData
       sources.search.results = searchResults
 
+      // Save progress after search
+      await savePartialResults(currentSearchId, [], sources, 10)
+
       // Check if we got any search results
       if (!searchResults || searchResults.length === 0) {
+        // Finalize with empty results
+        const summary = {
+          riskLevel: "low" as const,
+          adverseFindings: 0,
+          recommendation: "No search results found. Consider refining your search terms.",
+          entityMatchStats: {
+            totalResults: 0,
+            validEntityMatches: 0,
+          },
+          keywords: keywordTerms,
+        }
+
+        await finalizeSearch(currentSearchId, summary)
+
         await sendUpdate({
           status: "complete",
           progress: 100,
           results: [],
           sources: sources,
-          summary: {
-            riskLevel: "low",
-            adverseFindings: 0,
-            recommendation: "No search results found. Consider refining your search terms.",
-          },
+          summary,
+          searchId: currentSearchId,
+          autoSaved: true,
         })
         return
       }
@@ -452,6 +490,7 @@ export async function POST(req: NextRequest) {
           status: "analyzing",
         })),
         sources: sources,
+        searchId: currentSearchId,
       })
 
       // Step 2: Scrape and analyze each result
@@ -461,6 +500,10 @@ export async function POST(req: NextRequest) {
       let scrapingFailures = 0
       let validEntityMatches = 0
       let totalResults = 0
+
+      // Save progress after every few results to avoid losing data
+      const SAVE_INTERVAL = 2 // Save after every 2 results
+      let lastSaveIndex = -1
 
       for (let i = 0; i < searchResults.length; i++) {
         const result = searchResults[i]
@@ -481,6 +524,7 @@ export async function POST(req: NextRequest) {
             })),
           ],
           sources: sources,
+          searchId: currentSearchId,
         })
 
         // Scrape the URL
@@ -576,7 +620,19 @@ export async function POST(req: NextRequest) {
             })),
           ],
           sources: sources,
+          searchId: currentSearchId,
         })
+
+        // Save partial results periodically
+        if (i - lastSaveIndex >= SAVE_INTERVAL) {
+          await savePartialResults(currentSearchId, analyzedResults.slice(lastSaveIndex + 1), sources, progress)
+          lastSaveIndex = i
+        }
+      }
+
+      // Save any remaining results
+      if (lastSaveIndex < analyzedResults.length - 1) {
+        await savePartialResults(currentSearchId, analyzedResults.slice(lastSaveIndex + 1), sources, 90)
       }
 
       // Step 3: Generate a summary
@@ -609,31 +665,59 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      // Create the final summary
+      const summary = {
+        riskLevel: riskLevel as "low" | "medium" | "high",
+        adverseFindings,
+        recommendation,
+        entityMatchStats: {
+          totalResults,
+          validEntityMatches,
+        },
+        keywords: keywordTerms,
+      }
+
+      // Finalize the search
+      await finalizeSearch(currentSearchId, summary)
+
       // Final update with complete results and summary
       await sendUpdate({
         status: "complete",
         progress: 100,
         results: analyzedResults,
         sources: sources,
-        summary: {
-          riskLevel,
-          adverseFindings,
-          recommendation,
-          entityMatchStats: {
-            totalResults,
-            validEntityMatches,
-          },
-          keywords: keywordTerms,
-        },
+        summary,
+        searchId: currentSearchId,
+        autoSaved: true,
       })
     } catch (error) {
       console.error("Error in search process:", error)
+
+      // Try to save what we have so far if we have a search ID
+      if (currentSearchId) {
+        try {
+          await savePartialResults(currentSearchId, [], sources, 50)
+
+          // Update the search record to indicate an error
+          await supabase
+            .from("searches")
+            .update({
+              status: "error",
+              recommendation: `Error during search: ${error instanceof Error ? error.message : "Unknown error"}`,
+            })
+            .eq("id", currentSearchId)
+        } catch (saveError) {
+          console.error("Error saving partial results after error:", saveError)
+        }
+      }
+
       await sendUpdate({
         status: "complete",
         progress: 100,
         results: [],
         sources: sources,
         error: `An error occurred during the search process: ${error instanceof Error ? error.message : "Unknown error"}`,
+        searchId: currentSearchId,
       })
     } finally {
       writer.close()

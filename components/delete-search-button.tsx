@@ -18,7 +18,15 @@ import { Trash2 } from "lucide-react"
 import { deleteSearch } from "@/app/actions"
 import { useToast } from "@/hooks/use-toast"
 
-export function DeleteSearchButton({ searchId, name }: { searchId: string; name: string }) {
+export function DeleteSearchButton({
+  searchId,
+  name,
+  onDelete,
+}: {
+  searchId: string
+  name: string
+  onDelete?: () => void
+}) {
   const [isPending, startTransition] = useTransition()
   const router = useRouter()
   const { toast } = useToast()
@@ -35,8 +43,14 @@ export function DeleteSearchButton({ searchId, name }: { searchId: string; name:
         })
         // Close the dialog
         setIsOpen(false)
-        // Force a refresh of the current route
-        router.refresh()
+
+        // Call the onDelete callback if provided
+        if (onDelete) {
+          onDelete()
+        } else {
+          // Force a refresh of the current route
+          router.refresh()
+        }
       } else {
         toast({
           title: "Error",
